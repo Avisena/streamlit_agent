@@ -1,235 +1,225 @@
 import streamlit as st
 import requests
-import json
-import uuid
+import pandas as pd
 from datetime import datetime
+from sqlalchemy import create_engine, text
 
-# Configuration
-AGENT_URL = "http://46.250.237.184:8000/agents/houpe-agent/runs"
-
-# Initialize session state
-if 'sessions' not in st.session_state:
-    st.session_state.sessions = {}
-if 'current_session' not in st.session_state:
-    st.session_state.current_session = None
-if 'session_counter' not in st.session_state:
-    st.session_state.session_counter = 1
-
-def create_new_session():
-    """Create a new chat session"""
-    session_id = str(st.session_state.session_counter)
-    st.session_state.session_counter += 1
-    
-    st.session_state.sessions[session_id] = {
-        'id': session_id,
-        'name': f"Chat {session_id}",
-        'messages': [],
-        'created_at': datetime.now().strftime("%Y-%m-%d %H:%M")
-    }
-    st.session_state.current_session = session_id
-    return session_id
-
-def send_message(message, session_id):
-    """Send message to Houpe Agent"""
-    try:
-        # Form data untuk multipart/form-data
-        form_data = {
-            "message": (None, message),
-            "session_id": (None, session_id),
-            "user_id": (None, "666"),  # bisa diganti sesuai kebutuhan
-            "stream": (None, "false")
-        }
-        
-        response = requests.post(
-            AGENT_URL,
-            files=form_data,
-            headers={"accept": "application/json"},
-            timeout=60
-        )
-        
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return {
-                "error": True,
-                "status_code": response.status_code,
-                "message": f"Error: {response.status_code}"
-            }
-            
-    except requests.exceptions.Timeout:
-        return {"error": True, "message": "Request timeout"}
-    except requests.exceptions.RequestException as e:
-        return {"error": True, "message": str(e)}
-
-# Page config
+# ─── Page Config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Houpe Agent Chat",
+    page_title="Asisten Keuangan UKM",
     page_icon="💬",
-    layout="wide"
+    layout="wide",
 )
 
-# Sidebar - Session Management
-with st.sidebar:
-    st.title("💬 Chat Sessions")
-    
-    # New Session Button
-    if st.button("➕ New Session", use_container_width=True, type="primary"):
-        create_new_session()
-        st.rerun()
-    
-    st.divider()
-    
-    # List of sessions
-    if st.session_state.sessions:
-        st.subheader("Your Sessions")
-        for session_id, session in st.session_state.sessions.items():
-            col1, col2 = st.columns([4, 1])
-            
-            with col1:
-                # Button untuk switch session
+@st.cache_resource
+def get_db_engine():
+    # URL disederhanakan
+    url = f"mysql+pymysql://{st.secrets['DB_USER']}:{st.secrets['DB_PASS']}@{st.secrets['DB_HOST']}:{st.secrets['DB_PORT']}/{st.secrets['DB_NAME']}"
+    # Langsung return engine tanpa parameter pool yang aneh-aneh
+    return create_engine(url)
+
+@st.cache_data(ttl=60)
+def fetch_transactions(limit: int = 100) -> pd.DataFrame:
+    try:
+        engine = get_db_engine()
+        # Sekarang :limit bisa digunakan di query
+        query = text("""
+            SELECT date, type, amount, account_name, category_name, description 
+            FROM transactions 
+            ORDER BY date DESC 
+            LIMIT :limit
+        """)
+        with engine.connect() as conn:
+            return pd.read_sql(query, conn, params={"limit": limit})
+    except Exception as e:
+        st.error(f"Gagal ambil data: {e}")
+        return pd.DataFrame()
+
+# ─── Agent Call ─────────────────────────────────────────────────────────────────
+def call_agent(message: str, session_id: str) -> str:
+    """Kirim pesan ke agent, return teks balasan."""
+    url = f"{st.secrets['BACKEND_HOST']}/agents/asisten-keuangan-ukm/runs"
+    try:
+        resp = requests.post(
+            url,
+            files={
+                "message":    (None, message),
+                "session_id": (None, session_id),
+                "user_id":    (None, "666"),
+                "stream":     (None, "false"),
+            },
+            headers={"accept": "application/json"},
+            timeout=60,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("content") or data.get("message") or "Tidak ada balasan."
+        return f"⚠️ Error {resp.status_code}: {resp.text[:200]}"
+    except requests.Timeout:
+        return "⚠️ Request timeout. Coba lagi."
+    except Exception as e:
+        return f"⚠️ {e}"
+
+
+# ─── Session Helpers ─────────────────────────────────────────────────────────────
+def _init_state():
+    if "sessions" not in st.session_state:
+        st.session_state.sessions = {}
+    if "current_session" not in st.session_state:
+        st.session_state.current_session = None
+    if "session_counter" not in st.session_state:
+        st.session_state.session_counter = 1
+
+
+def create_session() -> str:
+    sid = str(st.session_state.session_counter)
+    st.session_state.session_counter += 1
+    st.session_state.sessions[sid] = {
+        "id":         sid,
+        "name":       f"Chat {sid}",
+        "messages":   [],
+        "created_at": datetime.now().strftime("%d %b %Y, %H:%M"),
+    }
+    st.session_state.current_session = sid
+    return sid
+
+
+def delete_session(sid: str):
+    st.session_state.sessions.pop(sid, None)
+    if st.session_state.current_session == sid:
+        remaining = list(st.session_state.sessions)
+        st.session_state.current_session = remaining[-1] if remaining else None
+
+
+# ─── Sidebar ─────────────────────────────────────────────────────────────────────
+def render_sidebar():
+    with st.sidebar:
+        st.title("💬 Sesi Chat")
+
+        if st.button("➕ Sesi Baru", use_container_width=True, type="primary"):
+            create_session()
+            st.rerun()
+
+        st.divider()
+
+        for sid, sesh in list(st.session_state.sessions.items()):
+            is_active = st.session_state.current_session == sid
+            col_btn, col_del = st.columns([5, 1])
+
+            with col_btn:
                 if st.button(
-                    f"📝 {session['name']}", 
-                    key=f"session_{session_id}",
+                    f"{'▶ ' if is_active else ''}{sesh['name']}",
+                    key=f"open_{sid}",
                     use_container_width=True,
-                    type="secondary" if st.session_state.current_session != session_id else "primary"
+                    type="primary" if is_active else "secondary",
                 ):
-                    st.session_state.current_session = session_id
+                    st.session_state.current_session = sid
                     st.rerun()
-            
-            with col2:
-                # Delete button
-                if st.button("🗑️", key=f"del_{session_id}"):
-                    del st.session_state.sessions[session_id]
-                    if st.session_state.current_session == session_id:
-                        st.session_state.current_session = None
+
+            with col_del:
+                if st.button("🗑", key=f"del_{sid}", help="Hapus sesi"):
+                    delete_session(sid)
                     st.rerun()
-            
-            # Show created time
-            st.caption(f"Created: {session['created_at']}")
+
+            st.caption(sesh["created_at"])
             st.divider()
-    else:
-        st.info("No sessions yet. Click 'New Session' to start!")
-    
-    # Info section
-    st.divider()
-    st.caption("🤖 Houpe Agent")
-    st.caption("Powered by AgentOps")
 
-# Main Chat Interface
-if st.session_state.current_session is None:
-    # Welcome screen
-    st.title("👋 Welcome to Houpe Agent Chat")
-    st.write("Click **New Session** in the sidebar to start chatting!")
-    
-    st.info("💡 Houpe Agent adalah customer support yang siap membantu Anda dengan informasi tentang Houpe.id")
-    
-else:
-    current_session = st.session_state.sessions[st.session_state.current_session]
-    
-    # Header
-    col1, col2 = st.columns([6, 1])
-    with col1:
-        st.title(f"💬 {current_session['name']}")
-    with col2:
-        # Rename session
-        if st.button("✏️ Rename"):
-            st.session_state.rename_mode = True
-    
-    # Rename modal (simple version)
-    if 'rename_mode' in st.session_state and st.session_state.rename_mode:
-        new_name = st.text_input("New session name:", value=current_session['name'])
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Save"):
-                current_session['name'] = new_name
-                st.session_state.rename_mode = False
-                st.rerun()
-        with col2:
-            if st.button("Cancel"):
-                st.session_state.rename_mode = False
-                st.rerun()
-    
-    st.divider()
-    
-    # Chat messages container
-    chat_container = st.container()
-    
-    with chat_container:
-        # Display chat history
-        for msg in current_session['messages']:
-            if msg['role'] == 'user':
-                with st.chat_message("user", avatar="👤"):
-                    st.write(msg['content'])
-            else:
-                with st.chat_message("assistant", avatar="🤖"):
-                    st.markdown(msg['content'])
-                    
-                    # Show metrics if available
-                    if 'metrics' in msg:
-                        with st.expander("📊 Response Metrics"):
-                            metrics = msg['metrics']
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("Total Tokens", metrics.get('total_tokens', 'N/A'))
-                            with col2:
-                                st.metric("Duration", f"{metrics.get('duration', 0):.2f}s")
-                            with col3:
-                                st.metric("Model", msg.get('model', 'N/A'))
-    
-    # Chat input
-    user_input = st.chat_input("Type your message here...")
-    
-    if user_input:
-        # Add user message to chat
-        current_session['messages'].append({
-            'role': 'user',
-            'content': user_input
-        })
-        
-        # Display user message
-        with chat_container:
-            with st.chat_message("user", avatar="👤"):
-                st.write(user_input)
-        
-        # Show loading spinner
-        with chat_container:
-            with st.chat_message("assistant", avatar="🤖"):
-                with st.spinner("Agent is thinking..."):
-                    # Send to agent
-                    response = send_message(user_input, st.session_state.current_session)
-                    
-                    if 'error' in response:
-                        st.error(f"❌ {response['message']}")
-                        assistant_message = f"Sorry, there was an error: {response['message']}"
-                    else:
-                        # Extract response content
-                        assistant_message = response.get('content', 'No response')
-                        
-                        # Display response
-                        st.markdown(assistant_message)
-                        
-                        # Show metrics
-                        if 'metrics' in response:
-                            with st.expander("📊 Response Metrics"):
-                                metrics = response['metrics']
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric("Total Tokens", metrics.get('total_tokens', 'N/A'))
-                                with col2:
-                                    st.metric("Duration", f"{metrics.get('duration', 0):.2f}s")
-                                with col3:
-                                    st.metric("Model", response.get('model', 'N/A'))
-                        
-                        # Add assistant message to chat
-                        current_session['messages'].append({
-                            'role': 'assistant',
-                            'content': assistant_message,
-                            'metrics': response.get('metrics', {}),
-                            'model': response.get('model', '')
-                        })
-        
-        st.rerun()
 
-# Footer
-st.divider()
-st.caption("Made with ❤️ for Houpe.id | Powered by Streamlit")
+# ─── Chat Tab ────────────────────────────────────────────────────────────────────
+def render_chat(sesh: dict):
+    st.subheader(f"💬 {sesh['name']}")
+
+    # Render riwayat pesan
+    for msg in sesh["messages"]:
+        avatar = "👤" if msg["role"] == "user" else "🤖"
+        with st.chat_message(msg["role"], avatar=avatar):
+            st.markdown(msg["content"])
+
+    # Input
+    prompt = st.chat_input("Tulis pesan...")
+    if not prompt:
+        return
+
+    # Tampilkan pesan user
+    sesh["messages"].append({"role": "user", "content": prompt})
+    with st.chat_message("user", avatar="👤"):
+        st.markdown(prompt)
+
+    # Panggil agent
+    with st.chat_message("assistant", avatar="🤖"):
+        with st.spinner("Memproses..."):
+            reply = call_agent(prompt, sesh["id"])
+        st.markdown(reply)
+
+    sesh["messages"].append({"role": "assistant", "content": reply})
+
+    # ✅ Tidak clear cache di sini — biarkan TTL yang urus
+    st.rerun()
+
+
+# ─── Database Tab ────────────────────────────────────────────────────────────────
+def render_database():
+    st.subheader("🗄️ Database: `transactions`")
+
+    col_refresh, col_limit, _ = st.columns([1, 2, 5])
+    with col_refresh:
+        if st.button("🔄 Refresh"):
+            fetch_transactions.clear()
+            st.rerun()
+    with col_limit:
+        limit = st.selectbox("Tampilkan", [100, 500, 1000, 5000], index=1, label_visibility="collapsed")
+
+    df = fetch_transactions(limit=limit)
+
+    if df.empty:
+        st.info("Belum ada transaksi.")
+        return
+
+    # Metrics
+    income  = df[df["type"] == "INCOME"]["amount"].sum()
+    expense = df[df["type"] == "EXPENSE"]["amount"].sum()
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("💰 Pemasukan",  f"Rp {income:,.0f}")
+    m2.metric("💸 Pengeluaran", f"Rp {expense:,.0f}")
+    m3.metric("📊 Saldo",       f"Rp {income - expense:,.0f}")
+    m4.metric("🔢 Transaksi",   f"{len(df):,}")
+
+    st.divider()
+
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "date":          st.column_config.DateColumn("Tanggal", format="DD MMM YYYY"),
+            "amount":        st.column_config.NumberColumn("Nominal (Rp)", format="Rp %d"),
+            "type":          st.column_config.TextColumn("Tipe"),
+            "account_name":  st.column_config.TextColumn("Akun"),
+            "category_name": st.column_config.TextColumn("Kategori"),
+            "description":   st.column_config.TextColumn("Keterangan"),
+        },
+    )
+
+
+# ─── Main ────────────────────────────────────────────────────────────────────────
+def main():
+    _init_state()
+    render_sidebar()
+
+    if st.session_state.current_session is None:
+        st.title("👋 Asisten Keuangan UKM")
+        st.write("Buat sesi baru di sidebar untuk mulai chat.")
+        return
+
+    sesh = st.session_state.sessions[st.session_state.current_session]
+    tab_chat, tab_db = st.tabs(["💬 Chat", "🗄️ Database"])
+
+    with tab_chat:
+        render_chat(sesh)
+
+    with tab_db:
+        render_database()
+
+
+if __name__ == "__main__":
+    main()
