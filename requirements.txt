@@ -4,3 +4,4 @@ numpy
 sqlalchemy
 psycopg2-binary
 pymysql
+psycopg[binary]
