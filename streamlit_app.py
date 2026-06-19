@@ -60,14 +60,19 @@ def fetch_transactions(limit: int = 100) -> pd.DataFrame:
 # ─── Agent Call ─────────────────────────────────────────────────────────────────
 def call_agent(message: str, session_id: str) -> str:
     url = f"{st.secrets['BACKEND_HOST']}/agents/asisten-keuangan-ukm/runs"
+    dependencies = json.dumps({
+        "timezone": "Asia/Jakarta"
+    })
+    
     try:
         resp = requests.post(
             url,
             files={
-                "message":    (None, message),
-                "session_id": (None, SESSION_ID),
-                "user_id":    (None, USER_ID),
-                "stream":     (None, "false"),
+                "message":      (None, message),
+                "session_id":   (None, session_id),
+                "user_id":      (None, USER_ID),  
+                "stream":       (None, "false"),
+                "dependencies": (None, dependencies), 
             },
             timeout=100,
         )
