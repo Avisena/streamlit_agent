@@ -63,7 +63,7 @@ def call_agent(message: str, session_id: str) -> str:
     # Timezone IANA terdeteksi otomatis dari browser klien (mis. "Asia/Jakarta"),
     # dikirim oleh browser via header dan dibaca Streamlit lewat st.context.
     # Fallback ke Asia/Jakarta kalau untuk suatu alasan belum terisi.
-    client_timezone = "UTC+7"
+    client_timezone = st.context.timezone or "Asia/Jakarta"
     dependencies = json.dumps({
         "user_timezone": client_timezone
     })
