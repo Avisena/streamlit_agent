@@ -2,26 +2,24 @@ import streamlit as st
 import requests
 import pandas as pd
 import json
-from datetime import datetime
+import uuid
 from sqlalchemy import create_engine, text
 
 # ─── Page Config ────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Asisten Keuangan UKM", page_icon="💬", layout="wide")
 
-# ─── Session State Init — HARUS dipanggil sebelum sidebar/UI lain dirender ──────
+# ─── Session State Init ─────────────────────────────────────────────────────────
 def _init_state():
-    if "sessions" not in st.session_state:
-        st.session_state.sessions = {}
-    if "current_session" not in st.session_state:
-        st.session_state.current_session = None
-    if "session_counter" not in st.session_state:
-        st.session_state.session_counter = 1
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
 
 _init_state()
 # ───────────────────────────────────────────────────────────────────────────────
 
 USER_ID = "29b17d18-c122-4b9f-8b1f-265e7b797e87"
-SESSION_ID = "66617d18-c122-4b9f-8b1f-265e7b797666"
+
 
 # --- Database Setup ---
 @st.cache_resource
@@ -64,16 +62,16 @@ def call_agent(message: str, session_id: str) -> str:
     dependencies = json.dumps({
         "user_timezone": "Asia/Jakarta"
     })
-    
+
     try:
         resp = requests.post(
             url,
             files={
                 "message":      (None, message),
                 "session_id":   (None, session_id),
-                "user_id":      (None, USER_ID),  
+                "user_id":      (None, USER_ID),
                 "stream":       (None, "false"),
-                # "dependencies": (None, dependencies), 
+                # "dependencies": (None, dependencies),
             },
             timeout=100,
         )
@@ -89,74 +87,40 @@ def call_agent(message: str, session_id: str) -> str:
         return "⚠️ Agent tidak merespon."
 
 
-# ─── Session Helpers ─────────────────────────────────────────────────────────────
-def create_session():
-    sid = str(st.session_state.session_counter)
-    st.session_state.session_counter += 1
-    st.session_state.sessions[sid] = {
-        "id": sid,
-        "name": f"Chat {sid}",
-        "messages": [],
-        "created_at": datetime.now().strftime("%d %b, %H:%M"),
-    }
-    st.session_state.current_session = sid
+# ─── Main ────────────────────────────────────────────────────────────────────────
+tab1, tab2 = st.tabs(["💬 Chat", "🗄️ Database"])
 
+with tab1:
+    st.subheader("💬 Asisten Keuangan UKM")
 
-# ─── Sidebar ─────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.title("💬 Sesi Chat")
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-    if st.button("➕ Sesi Baru", use_container_width=True, type="primary"):
-        create_session()
+    if prompt := st.chat_input("Tulis pesan..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Memproses..."):
+                reply = call_agent(prompt, st.session_state.session_id)
+            st.markdown(reply)
+
+        st.session_state.messages.append({"role": "assistant", "content": reply})
+
+with tab2:
+    st.subheader("🗄️ Database: `transactions`")
+
+    if st.button("🔄 Refresh"):
+        fetch_transactions.clear()
         st.rerun()
 
-    st.divider()
-
-    for sid, sesh in list(st.session_state.sessions.items()):
-        is_active = st.session_state.current_session == sid
-        if st.button(
-            sesh["name"],
-            key=f"btn_{sid}",
-            use_container_width=True,
-            type="primary" if is_active else "secondary",
-        ):
-            st.session_state.current_session = sid
-            st.rerun()
-
-
-# ─── Main ────────────────────────────────────────────────────────────────────────
-if st.session_state.current_session is None:
-    st.title("👋 Pilih atau buat sesi di sidebar")
-else:
-    sesh = st.session_state.sessions[st.session_state.current_session]
-    tab1, tab2 = st.tabs(["💬 Chat", "🗄️ Database"])
-
-    with tab1:
-        st.subheader(f"💬 {sesh['name']}")
-
-        for msg in sesh["messages"]:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-
-        if prompt := st.chat_input("Tulis pesan..."):
-            sesh["messages"].append({"role": "user", "content": prompt})
-            with st.spinner("Memproses..."):
-                reply = call_agent(prompt, sesh["id"])
-            sesh["messages"].append({"role": "assistant", "content": reply})
-            st.rerun()
-
-    with tab2:
-        st.subheader("🗄️ Database: `transactions`")
-
-        if st.button("🔄 Refresh"):
-            fetch_transactions.clear()
-            st.rerun()
-
-        df = fetch_transactions(limit=500)
-        if not df.empty:
-            st.dataframe(df, use_container_width=True, hide_index=True)
-            col1, col2 = st.columns(2)
-            col1.metric("Pemasukan", f"Rp {df[df['type']=='INCOME']['amount'].sum():,.0f}")
-            col2.metric("Pengeluaran", f"Rp {df[df['type']=='EXPENSE']['amount'].sum():,.0f}")
-        else:
-            st.info("Data kosong.")
+    df = fetch_transactions(limit=500)
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        col1, col2 = st.columns(2)
+        col1.metric("Pemasukan", f"Rp {df[df['type']=='INCOME']['amount'].sum():,.0f}")
+        col2.metric("Pengeluaran", f"Rp {df[df['type']=='EXPENSE']['amount'].sum():,.0f}")
+    else:
+        st.info("Data kosong.")
