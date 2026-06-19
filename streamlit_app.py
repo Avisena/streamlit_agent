@@ -59,8 +59,13 @@ def fetch_transactions(limit: int = 100) -> pd.DataFrame:
 # ─── Agent Call ─────────────────────────────────────────────────────────────────
 def call_agent(message: str, session_id: str) -> str:
     url = f"{st.secrets['BACKEND_HOST']}/agents/asisten-keuangan-ukm/runs"
+
+    # Timezone IANA terdeteksi otomatis dari browser klien (mis. "Asia/Jakarta"),
+    # dikirim oleh browser via header dan dibaca Streamlit lewat st.context.
+    # Fallback ke Asia/Jakarta kalau untuk suatu alasan belum terisi.
+    client_timezone = st.context.timezone or "Asia/Jakarta"
     dependencies = json.dumps({
-        "user_location": "Asia/Jakarta"
+        "user_timezone": client_timezone
     })
 
     try:
