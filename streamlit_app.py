@@ -60,7 +60,7 @@ def fetch_transactions(limit: int = 100) -> pd.DataFrame:
 def call_agent(message: str, session_id: str) -> str:
     url = f"{st.secrets['BACKEND_HOST']}/agents/asisten-keuangan-ukm/runs"
     dependencies = json.dumps({
-        "user_timezone": "Asia/Jakarta"
+        "user_location": "Asia/Jakarta"
     })
 
     try:
