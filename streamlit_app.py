@@ -71,7 +71,7 @@ def call_agent(message: str, session_id: str) -> str:
                 "session_id":   (None, session_id),
                 "user_id":      (None, USER_ID),
                 "stream":       (None, "false"),
-                # "dependencies": (None, dependencies),
+                "dependencies": (None, dependencies),
             },
             timeout=100,
         )
